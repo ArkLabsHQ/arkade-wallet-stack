@@ -1,0 +1,141 @@
+# Arkade Wallet Stack
+#
+# A turnkey bundle of provider-side Arkade services behind one automatic-HTTPS
+# edge. Configure with `.env` (see .env.example) and launch with `./setup.sh`.
+#
+# Only Caddy publishes host ports (80/443). Every other service is reachable
+# only on the internal network and, where public, through Caddy by subdomain.
+name: arkade-wallet-stack
+
+services:
+  # ---------------------------------------------------------------------------
+  # Edge: reverse proxy + automatic TLS (Let's Encrypt) for all public services.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env (run ./setup.sh)}
+      # Hostnames are derived from BASE_DOMAIN and passed to the Caddyfile.
+      DELEGATE_HOST: delegate.${BASE_DOMAIN:?set BASE_DOMAIN in .env (run ./setup.sh)}
+      LNURL_HOST: lnurl.${BASE_DOMAIN}
+      BACKUP_HOST: backup.${BASE_DOMAIN}
+      COVCLAIM_HOST: covclaim.${BASE_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # persisted certificates — do not delete
+      - caddy-config:/config
+    depends_on:
+      - fulmine
+      - lnurl-server
+      - covclaimd
+      - contract-backup
+
+  # ---------------------------------------------------------------------------
+  # fulmine (delegate mode): refreshes users' VTXOs so funds don't expire while
+  # they are offline. Public surface is the delegate API (:7002) only; the
+  # macaroon-protected admin API + web UI (:7001) and gRPC (:7000) stay internal.
+  # ---------------------------------------------------------------------------
+  fulmine:
+    image: ${FULMINE_IMAGE:-ghcr.io/arklabshq/fulmine:v0.3.25}
+    restart: unless-stopped
+    environment:
+      FULMINE_ARK_SERVER: ${ARKADE_SERVER_URL:?set ARKADE_SERVER_URL in .env}
+      FULMINE_ESPLORA_URL: ${ESPLORA_URL:?set ESPLORA_URL in .env}
+      FULMINE_DELEGATE_ENABLED: "true"
+      FULMINE_DELEGATE_FEE: ${FULMINE_DELEGATE_FEE:-0}
+      # Auto-unlock from a file so the delegate resumes after every restart.
+      FULMINE_UNLOCKER_TYPE: file
+      FULMINE_UNLOCKER_FILE_PATH: /run/secrets/fulmine_password
+      # Macaroon auth stays ON — do NOT set FULMINE_NO_MACAROONS on mainnet.
+    ports:
+      # Admin API + web UI on loopback only (never internet-facing). Reach it
+      # for the one-time wallet setup via an SSH tunnel — see README / setup.sh.
+      - "127.0.0.1:7001:7001"
+    volumes:
+      - fulmine-data:/app/data
+    secrets:
+      - fulmine_password
+
+  # ---------------------------------------------------------------------------
+  # lnurl-server: LNURL-pay / Lightning Address service. Public API on :3000.
+  # The admin API (:3001) has no built-in auth and is intentionally NOT routed.
+  # ---------------------------------------------------------------------------
+  lnurl-server:
+    image: ${LNURL_IMAGE:-ghcr.io/arklabshq/lnurl-server:0.2.6}
+    restart: unless-stopped
+    environment:
+      BASE_URL: https://lnurl.${BASE_DOMAIN}
+      DB_PATH: /data/lnurl.db
+      TOKEN_ENCRYPTION_KEY: ${LNURL_TOKEN_ENCRYPTION_KEY:?run ./setup.sh to generate secrets}
+      BOOTSTRAP_DOMAIN: lnurl.${BASE_DOMAIN}
+    volumes:
+      - lnurl-data:/data
+
+  # ---------------------------------------------------------------------------
+  # covclaimd: non-custodial covenant-claim daemon. Needs the Arkade Service
+  # (gRPC) and the covenant emulator (gRPC). REST/pubkey API (:7071) is public
+  # so wallets can fetch its encryption pubkey; gRPC (:7070) stays internal.
+  # ---------------------------------------------------------------------------
+  covclaimd:
+    image: ${COVCLAIMD_IMAGE:-ghcr.io/arkade-os/covclaimd:v0.0.1-rc.0}
+    restart: unless-stopped
+    environment:
+      COVCLAIMD_ARK_URL: ${COVCLAIM_ARK_URL:?set COVCLAIM_ARK_URL in .env}
+      COVCLAIMD_EMULATOR_URL: ${COVCLAIM_EMULATOR_URL:?set COVCLAIM_EMULATOR_URL in .env}
+      COVCLAIMD_SECRET_KEY: ${COVCLAIM_SECRET_KEY:?run ./setup.sh to generate secrets}
+      COVCLAIMD_GRPC_PORT: "7070"
+      COVCLAIMD_HTTP_PORT: "7071"
+
+  # ---------------------------------------------------------------------------
+  # contract-backup (bucket-sync-server): E2E-encrypted backup sync. Stores only
+  # ciphertext; wallets authenticate with their own secp256k1 key (BIP-340).
+  # NOTE: this image is linux/amd64-only and ships no shell, so it has no
+  # in-container healthcheck. On arm64 hosts, build it from source (see README).
+  # ---------------------------------------------------------------------------
+  contract-backup:
+    image: ${BUCKET_SYNC_IMAGE:-ghcr.io/kukks/bucket-sync-server:latest}
+    restart: unless-stopped
+    environment:
+      Backend: Postgres
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Username=arkade;Password=${POSTGRES_PASSWORD:?run ./setup.sh to generate secrets};Database=bucketsync"
+      Passkey__RpId: backup.${BASE_DOMAIN}
+      Passkey__Origin: https://backup.${BASE_DOMAIN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # postgres: durable store for contract-backup only. Internal network only.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arkade
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./setup.sh to generate secrets}
+      POSTGRES_DB: bucketsync
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arkade -d bucketsync"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+secrets:
+  # The fulmine wallet password, generated by setup.sh and mounted read-only at
+  # /run/secrets/fulmine_password. `up` fails clearly if this file is missing.
+  fulmine_password:
+    file: ./secrets/fulmine_password
+
+volumes:
+  caddy-data:
+  caddy-config:
+  fulmine-data:
+  lnurl-data:
+  pgdata:

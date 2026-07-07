@@ -1,0 +1,16 @@
+# Local configuration & secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+secrets/
+
+# Runtime data / bind mounts
+data/
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

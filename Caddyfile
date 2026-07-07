@@ -1,0 +1,49 @@
+# Arkade Wallet Stack — Caddy edge configuration.
+#
+# Hostnames come from the caddy service environment in docker-compose.yml, which
+# derives them from BASE_DOMAIN (e.g. DELEGATE_HOST=delegate.<BASE_DOMAIN>).
+# Caddy obtains and renews TLS certificates automatically for each site.
+{
+	email {$ACME_EMAIL}
+}
+
+# fulmine delegate API — the public delegate surface (VTXO refresh).
+# The macaroon-protected admin API + web UI (:7001) and gRPC (:7000) are NOT
+# exposed here; reach them over the internal network / an SSH tunnel.
+{$DELEGATE_HOST} {
+	reverse_proxy fulmine:7002
+}
+
+# LNURL-pay / Lightning Address server.
+# flush_interval -1 disables response buffering so the wallet's long-lived
+# Server-Sent-Events stream is delivered in real time.
+{$LNURL_HOST} {
+	reverse_proxy lnurl-server:3000 {
+		flush_interval -1
+	}
+}
+
+# Encrypted contract-backup server (bucket-sync).
+{$BACKUP_HOST} {
+	reverse_proxy contract-backup:8080
+}
+
+# covclaimd public REST / pubkey API (wallets fetch its encryption pubkey here).
+# The gRPC port (:7070) stays internal.
+{$COVCLAIM_HOST} {
+	reverse_proxy covclaimd:7071
+}
+
+# --- Optional: expose the fulmine admin UI behind HTTP basic auth -------------
+# The admin UI is provider-internal by default. To publish it, add
+#   WALLET_HOST: wallet.${BASE_DOMAIN}
+# to the caddy service environment in docker-compose.yml, generate a hash with
+#   docker run --rm caddy:2 caddy hash-password --plaintext 'your-strong-pass'
+# and uncomment this block (replacing the hash):
+#
+# {$WALLET_HOST} {
+# 	basic_auth {
+# 		admin $2a$14$REPLACE_WITH_YOUR_BCRYPT_HASH
+# 	}
+# 	reverse_proxy fulmine:7001
+# }

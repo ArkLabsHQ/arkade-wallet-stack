@@ -1,0 +1,8 @@
+# This project deploys to Linux servers — keep LF line endings everywhere so
+# shell scripts, the Makefile, and configs never break on a CRLF checkout.
+* text=auto eol=lf
+
+*.sh      text eol=lf
+Makefile  text eol=lf
+Caddyfile text eol=lf
+*.yml     text eol=lf
