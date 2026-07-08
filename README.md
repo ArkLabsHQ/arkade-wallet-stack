@@ -1,7 +1,7 @@
 # Arkade Wallet Stack
 
 A turnkey `docker compose` stack for **wallet providers who want to offer Arkade** to
-their users. It bundles four provider-side services behind a single automatic-HTTPS
+their users. It bundles five provider-side services behind a single automatic-HTTPS
 edge, configured by one `.env` and launched by one script.
 
 This stack **connects to an existing, hosted Arkade Service** — it does not run its own.
@@ -18,6 +18,7 @@ Ark Labs); the stack runs the value-added services your wallet users talk to.
 | **lnurl-server** | LNURL-pay / Lightning Address service. Users receive Lightning payments into their Arkade wallet. | `lnurl.<domain>` |
 | **covclaimd** | Non-custodial covenant-claim daemon: automatically claims preimage-locked VTXOs. Holds no funds and no wallet. | `covclaim.<domain>` |
 | **contract-backup** ([bucket-sync-server](https://github.com/Kukks/bucket-sync-server)) | End-to-end-encrypted backup sync. Stores only ciphertext; wallets authenticate with their own secp256k1 key. | `backup.<domain>` |
+| **payment-push** ([bitcoin-payment-push-service](https://github.com/tiero/bitcoin-payment-push-service)) | Push-notifies a user's phone when an inbound Lightning payment lands. Monitor-only; wallets register per-invoice. | `push.<domain>` |
 
 Supporting containers: **Caddy** (TLS/reverse proxy) and **Postgres** (storage for
 contract-backup only).
@@ -25,23 +26,24 @@ contract-backup only).
 Upstream projects: [fulmine](https://github.com/ArkLabsHQ/fulmine) ·
 [lnurl-server](https://github.com/ArkLabsHQ/lnurl-server) ·
 [covclaimd](https://github.com/arkade-os/covclaimd) ·
-[bucket-sync-server](https://github.com/Kukks/bucket-sync-server)
+[bucket-sync-server](https://github.com/Kukks/bucket-sync-server) ·
+[bitcoin-payment-push-service](https://github.com/tiero/bitcoin-payment-push-service)
 
 ## Architecture
 
 ```
-                  ┌──────────── Caddy (:80/:443, automatic HTTPS) ────────────┐
- Internet ───────▶│ delegate.<d>   lnurl.<d>   backup.<d>   covclaim.<d>       │
-                  └────┬────────────┬────────────┬────────────┬───────────────┘
-                       ▼            ▼            ▼            ▼
-                 fulmine:7002   lnurl:3000   backup:8080  covclaimd:7071
-                 (delegate)     (LNURL/SSE)     │            (REST)
-                 fulmine:7001 ── loopback only   ▼
-                 (admin/UI)                   postgres:5432 (internal)
-                       │                                     │
-                       │  external — you set these in .env   │
-                       ▼                                     ▼
-             Arkade Service + Esplora            Arkade Service + Emulator
+              ┌───────────────── Caddy (:80/:443, automatic HTTPS) ─────────────────┐
+ Internet ───▶│ delegate.<d>  lnurl.<d>  backup.<d>  covclaim.<d>  push.<d>          │
+              └────┬──────────┬──────────┬───────────┬────────────┬─────────────────┘
+                   ▼          ▼          ▼           ▼            ▼
+             fulmine:7002 lnurl:3000 backup:8080 covclaimd:7071 payment-push:3000
+             (delegate)   (LNURL/SSE)    │          (REST)       (Boltz monitor)
+             fulmine:7001 ─ loopback      ▼
+             (admin/UI)               postgres:5432 (internal)
+                   │                                    │
+                   │   external — you set these in .env  │
+                   ▼                                    ▼
+         Arkade Service + Esplora        Arkade Service + Emulator + Boltz
 ```
 
 The services do **not** form a mesh — each is dialed into by the end-user wallet. The only
@@ -52,11 +54,12 @@ an **Esplora** chain API (used by fulmine). Caddy is the sole ingress.
 
 - A **Linux server** with a public IP (a small VPS is fine). Everything installs via
   `setup.sh`; you don't need Docker preinstalled.
-- A **domain** you control, so you can create four subdomain DNS records.
+- A **domain** you control, so you can create five subdomain DNS records.
 - Endpoints for the **Arkade Service** you're integrating with:
   - its URL (for fulmine) and its gRPC address (for covclaimd),
   - a **covenant emulator** gRPC address (for covclaimd),
-  - an **Esplora**-compatible chain API URL (a public one such as `https://mempool.space/api` works).
+  - an **Esplora**-compatible chain API URL (a public one such as `https://mempool.space/api` works),
+  - a **Boltz API** URL (for payment-push).
 
 > **Architecture note:** the `contract-backup` image is published for `linux/amd64` only.
 > On an `arm64` host, build it from source — see [Caveats](#caveats).
@@ -87,12 +90,15 @@ All configuration lives in `.env` (git-ignored). `setup.sh` writes it for you; t
 
 | Key | Required | Description |
 |---|---|---|
-| `BASE_DOMAIN` | yes | Base domain. All four service subdomains derive from it. |
+| `BASE_DOMAIN` | yes | Base domain. All service subdomains derive from it. |
 | `ACME_EMAIL` | yes | Email Caddy uses to register Let's Encrypt certificates. |
 | `ARKADE_SERVER_URL` | yes | Arkade Service as a URL (used by fulmine), e.g. `https://arkd.example.com`. |
 | `COVCLAIM_ARK_URL` | yes | The **same** Arkade Service as a gRPC address (used by covclaimd), e.g. `arkd.example.com:7070`. |
 | `COVCLAIM_EMULATOR_URL` | yes | Covenant emulator gRPC address (used by covclaimd). |
 | `ESPLORA_URL` | yes | Esplora chain API base URL (used by fulmine). |
+| `BOLTZ_API_URL` | yes | Boltz API base URL (used by payment-push). |
+| `ARKADE_NETWORK` | default `bitcoin` | Network literal for payment-push (`bitcoin`/`signet`/`mutinynet`/…). |
+| `NTFY_BASE_URL` | default `https://ntfy.sh` | Push provider for payment-push (or switch to GroundControl/Expo in compose). |
 | `LNURL_TOKEN_ENCRYPTION_KEY` | generated | 32-byte hex key encrypting wallet tokens at rest in lnurl-server. |
 | `COVCLAIM_SECRET_KEY` | generated | 32-byte hex secp256k1 key for covclaimd. |
 | `POSTGRES_PASSWORD` | generated | Password for the bundled Postgres. |
@@ -113,6 +119,7 @@ delegate.<BASE_DOMAIN>    →  <server IP>
 lnurl.<BASE_DOMAIN>       →  <server IP>
 backup.<BASE_DOMAIN>      →  <server IP>
 covclaim.<BASE_DOMAIN>    →  <server IP>
+push.<BASE_DOMAIN>        →  <server IP>
 ```
 
 Once they resolve, Caddy obtains and renews TLS certificates automatically. No certificate
@@ -155,6 +162,8 @@ This stack ships **mainnet-safe defaults**:
 - **lnurl-server** always encrypts wallet tokens at rest — the insecure-storage shortcut is
   never enabled. Its unauthenticated admin API (`:3001`) is **not** exposed.
 - **Postgres** is never published to the host; it is reachable only on the internal network.
+- **payment-push** is monitor-only (holds no keys); its public `POST /register` is
+  rate-limited per client IP at the Caddy edge.
 - Secrets are strong-random and written with tight permissions; `.env` and `secrets/` are
   git-ignored. **Never commit them.**
 - All public traffic is TLS-terminated by Caddy.
@@ -175,13 +184,20 @@ This stack ships **mainnet-safe defaults**:
 - **Lightning Addresses** default to `user@lnurl.<BASE_DOMAIN>`. To serve bare
   `user@<BASE_DOMAIN>` addresses, add a Caddy route on the apex domain proxying
   `/.well-known/lnurlp/*` to `lnurl-server:3000`.
+- **payment-push** pins an **interim image built from a fork**
+  (`ghcr.io/kukks/bitcoin-payment-push-service`) while the upstream packaging PR is in
+  review. Switch `PAYMENT_PUSH_IMAGE` to `ghcr.io/tiero/…` once it's merged and published.
+- **Caddy is built locally** (`./caddy/Dockerfile`) to bundle the rate-limit plugin, so the
+  first `up` compiles it. Set `CADDY_IMAGE` to a prebuilt image if you maintain your own.
 
 ## Using your own reverse proxy
 
-Caddy is bundled for turnkey TLS. If you already run an edge (Traefik, nginx, etc.), remove
-the `caddy` service from `docker-compose.yml`, publish the service ports you need, and route
-to them from your existing proxy. The internal service ports are: fulmine delegate `7002`,
-lnurl `3000`, contract-backup `8080`, covclaimd REST `7071`.
+Caddy is bundled for turnkey TLS (built locally with the rate-limit plugin). If you already
+run an edge (Traefik, nginx, etc.), remove the `caddy` service from `docker-compose.yml`,
+publish the service ports you need, and route to them from your existing proxy — and
+reproduce the `POST /register` rate-limit there. The internal service ports are: fulmine
+delegate `7002`, lnurl `3000`, contract-backup `8080`, covclaimd REST `7071`,
+payment-push `3000`.
 
 ## Troubleshooting
 

@@ -12,8 +12,8 @@ help: ## Show this help
 setup: ## Run interactive setup (prereqs + config + launch)
 	@./setup.sh
 
-up: ## Start the stack in the background
-	$(COMPOSE) up -d
+up: ## Build the edge and start the stack in the background
+	$(COMPOSE) up -d --build
 
 down: ## Stop the stack (keeps volumes / data)
 	$(COMPOSE) down
@@ -27,11 +27,11 @@ logs: ## Follow logs from all services
 ps: ## Show service status
 	$(COMPOSE) ps
 
-pull: ## Pull the latest pinned images
-	$(COMPOSE) pull
+pull: ## Pull the latest pinned images (skips locally-built ones)
+	$(COMPOSE) pull --ignore-buildable
 
-update: pull ## Pull images and recreate changed containers
-	$(COMPOSE) up -d
+update: pull ## Rebuild the edge and recreate changed containers
+	$(COMPOSE) up -d --build
 
 config: ## Validate and render the effective compose config
 	$(COMPOSE) config

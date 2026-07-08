@@ -5,6 +5,7 @@
 # Caddy obtains and renews TLS certificates automatically for each site.
 {
 	email {$ACME_EMAIL}
+	order rate_limit before basic_auth
 }
 
 # fulmine delegate API — the public delegate surface (VTXO refresh).
@@ -32,6 +33,23 @@
 # The gRPC port (:7070) stays internal.
 {$COVCLAIM_HOST} {
 	reverse_proxy covclaimd:7071
+}
+
+# payment-push: inbound-payment notifications. POST /register is public and
+# rate-limited per client IP at the edge; other methods (GET/DELETE/health) pass through.
+{$PUSH_HOST} {
+	@register {
+		method POST
+		path /register
+	}
+	rate_limit @register {
+		zone register {
+			key {remote_host}
+			events 20
+			window 1m
+		}
+	}
+	reverse_proxy payment-push:3000
 }
 
 # --- Optional: expose the fulmine admin UI behind HTTP basic auth -------------

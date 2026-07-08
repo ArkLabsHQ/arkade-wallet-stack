@@ -78,13 +78,14 @@ configure() {
 	fi
 
 	log "Configuring your stack (press Enter to accept each default)"
-	local base_domain acme_email ark_url covclaim_ark covclaim_emu esplora fee
+	local base_domain acme_email ark_url covclaim_ark covclaim_emu esplora boltz_url fee
 	base_domain=$(value BASE_DOMAIN         "Base domain (all subdomains derive from this)" "example.com")
 	acme_email=$(value  ACME_EMAIL          "Email for Let's Encrypt TLS"                   "admin@${base_domain}")
 	ark_url=$(value     ARKADE_SERVER_URL   "Arkade Service URL (fulmine)"                  "https://arkd.${base_domain}")
 	covclaim_ark=$(value COVCLAIM_ARK_URL   "Arkade Service gRPC address (covclaim)"        "arkd.${base_domain}:7070")
 	covclaim_emu=$(value COVCLAIM_EMULATOR_URL "Covenant emulator gRPC address (covclaim)"  "emulator.${base_domain}:7073")
 	esplora=$(value     ESPLORA_URL         "Esplora chain API base URL"                    "https://mempool.space/api")
+	boltz_url=$(value   BOLTZ_API_URL       "Boltz API URL (payment-push)"                  "https://api.boltz.mutinynet.arkade.sh")
 	fee=$(value         FULMINE_DELEGATE_FEE "Delegate fee in satoshis"                     "0")
 
 	log "Generating secrets..."
@@ -106,6 +107,9 @@ ARKADE_SERVER_URL=${ark_url}
 COVCLAIM_ARK_URL=${covclaim_ark}
 COVCLAIM_EMULATOR_URL=${covclaim_emu}
 ESPLORA_URL=${esplora}
+BOLTZ_API_URL=${boltz_url}
+ARKADE_NETWORK=bitcoin
+NTFY_BASE_URL=https://ntfy.sh
 LNURL_TOKEN_ENCRYPTION_KEY=${lnurl_key}
 COVCLAIM_SECRET_KEY=${covclaim_key}
 POSTGRES_PASSWORD=${pg_pass}
@@ -117,10 +121,10 @@ EOF
 
 # --- 3. launch ---------------------------------------------------------------
 launch() {
-	log "Pulling images (this can take a minute)..."
-	docker compose pull
-	log "Starting the stack..."
-	docker compose up -d
+	log "Pulling images..."
+	docker compose pull --ignore-buildable
+	log "Building the edge and starting the stack (first run can take a few minutes)..."
+	docker compose up -d --build
 	ok "stack is up"
 }
 

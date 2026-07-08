@@ -23,6 +23,7 @@ jobs:
           COVCLAIM_ARK_URL=arkd.example.com:7070
           COVCLAIM_EMULATOR_URL=emulator.example.com:7073
           ESPLORA_URL=https://mempool.space/api
+          BOLTZ_API_URL=https://api.boltz.example.com
           LNURL_TOKEN_ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000
           COVCLAIM_SECRET_KEY=0000000000000000000000000000000000000000000000000000000000000000
           POSTGRES_PASSWORD=ci-postgres-pass
@@ -33,6 +34,9 @@ jobs:
       - name: Validate docker compose config
         run: docker compose config -q
 
+      - name: Build custom Caddy (rate-limit plugin)
+        run: docker build -t aws-caddy:ci ./caddy
+
       - name: Validate Caddyfile
         run: |
           docker run --rm \
@@ -41,5 +45,6 @@ jobs:
             -e LNURL_HOST=lnurl.example.com \
             -e BACKUP_HOST=backup.example.com \
             -e COVCLAIM_HOST=covclaim.example.com \
+            -e PUSH_HOST=push.example.com \
             -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
-            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+            aws-caddy:ci caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
